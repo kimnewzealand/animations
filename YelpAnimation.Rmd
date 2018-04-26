@@ -1,0 +1,153 @@
+---
+title: "Animating best place to stay in Edinburgh using the Yelp dataset"
+author: "kimnewzealand"
+date: "26 April 2018"
+output: html_document
+---
+
+In this project, I would like to identify the best place to stay in Edinburgh given a preference for Japanese restaurants. 
+
+I would like to visualise how much the number of people visiting restaurants changes by the location of the restaurant or the day of the week in Edinburgh.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages, include=FALSE}
+library(tidyverse)
+# Getting data
+library(httr)
+library(jsonlite)
+# Manipulating strings
+library(stringr)
+# Manipulating date and time
+library(lubridate)
+# Mapping packages
+library(maps)
+library(ggthemes)
+library(ggmap)
+# devtools::install_github("dgrtwo/gganimate")
+# devtools::install_github("yihui/animation")
+library(gganimate)
+library(ggalt)
+```
+
+## Load Data
+
+The [Yelp datasets](https://www.kaggle.com/yelp-dataset/yelp-dataset) have been cleaned into csv formats from JSON and so they are easy to load with the read_csv function from the [readr](https://cran.r-project.org/web/packages/readr/index.html) R package.
+
+These files have been downloaded into a local directory first to agree to the terms of use.
+
+```{r load data}
+# Read in the check in data
+yelpcheck <- read_csv("yelp_checkin.csv")
+# Read in the business data
+yelpbus <- read_csv("yelp_business.csv")
+```
+
+The two data files loaded are:
+
+**yelp_business.csv** includes locations and details of the  businesses by business_id. The location details are longitude and latitude which can be plotted with ggplot.  
+**yelp_checkin.csv** includes number of check ins by day and time by business_id. This business_id can used as an id for joining the two datasets.
+
+```{r clean data}
+# Convert the hour column nane to whathour and character
+names(yelpcheck)[3] <- "whathour"
+yelpcheck$whathour <- as.character(yelpcheck$whathour)
+
+# https://stat.ethz.ch/R-manual/R-devel/library/base/html/strptime.html
+
+yelpcheck$weekday <- recode(yelpcheck$weekday, 
+       "Sun"="Sunday",
+       "Mon"="Monday",
+       "Tue"="Tuesday",
+       "Wed"="Wednesday",
+       "Thu"="Thursday",
+       "Fri"="Friday",
+       "Sat"="Saturday")
+```
+
+## Filter data
+
+Since we are only analysing the city Edinburgh, we will filter the dataset by the city.
+
+```{r Filter by city}
+# Filter by city Edinburgh
+acity <- "Edinburgh"
+yelpcity <- yelpbus %>% 
+      filter(city==acity) 
+# Check for outliers
+range(yelpcity$longitude)
+range(yelpcity$latitude)
+plot(yelpcity$longitude,yelpcity$latitude)
+# Remove the outliers
+yelpcity <- yelpcity %>%
+      filter(longitude > -5) %>%
+      filter(latitude < 60)
+```
+
+## Aggregate datasets
+
+Next we will aggregate the check-in data at a weekday level to get an initial visualisation of the checkins by weekday. Later we could change the aggregation to view the data on an hourly basis.
+
+```{r aggregate}
+# Calculate the sum of the checkins grouped by the business and weekday
+yelpchecksum <- yelpcheck %>% 
+      group_by(business_id,weekday) %>% 
+      summarize_at( .vars = colnames(.)[4] , sum)
+# Merge the city data and the sum of checkins
+yelpcity <- merge(yelpcity,yelpchecksum, by ="business_id")
+# Filter by a category, where each category is a list of category types separated by ;
+acategory <- "Japanese"
+yelpcitycat <- yelpcity %>% 
+            filter(str_detect(categories, acategory))
+yelpcitycat$weekday <- factor(yelpcitycat$weekday, levels=c("Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"))
+```
+
+## Visualisations
+
+First let's get the base map of the city Edinburgh and plot a ggplot object using facet wrap by the weekday. This will give us an indication of whether we have the right map size given our filtered data by restaurant type.
+
+```{r staticmaps}
+# Get the Edinburgh base map
+edinmap <- get_map(location = c(lon = mean(yelpcitycat$longitude), lat = mean(yelpcitycat$latitude)), maptype = "roadmap", zoom = 14)
+# Map using ggmap function and the theme void
+ggmap(edinmap) + 
+   yelpcitycat %>% 
+      geom_point(mapping = aes(x = longitude, y = latitude, size = checkins, color = stars), alpha = 0.5) +
+      scale_color_gradientn(colours = rainbow(5)) +
+      theme_void() + 
+      ggtitle("Edinburgh") +
+      facet_grid(~weekday)
+```
+  
+There appear to be a couple blue of 4 star restaurants and two purple 5 star restaurants.
+
+Next create the [gganimate](https://www.rdocumentation.org/packages/gganimate/versions/0.1.0.9000/topics/gganimate) R package to animate checkins and ratings on a map. with the Old Town circled.
+
+```{r gganimation, interval = 2}
+oldtown <- yelpcity %>% filter(neighborhood=="Old Town")
+# Create the ggplot object g 
+g <- ggmap(edinmap) +  
+      theme_void() + 
+      ggtitle("Japanese Restaurants in Edinburgh") + 
+      geom_encircle(aes(longitude, y = latitude),
+                                     data = oldtown, size = 2, color = "orange")
+# Use suppressWarnings to ignore warning messages which halt the plotting
+suppressWarnings(g <-  g +
+                       geom_point(data=yelpcitycat,mapping = aes(x = longitude, y = latitude, size = as.factor(stars), frame = weekday, color = checkins))) 
+# gganimate the g object
+gganimate(g)
+gganimate(g, "edinb.gif")
+```
+
+
+In order to get the gganimate plot to work I had to install the github versions of the two packages gganimate and animation and use the suppressWarnings function as the warnings appeared to be halting the animation.
+
+  
+devtools::install_github("dgrtwo/gganimate")  
+devtools::install_github("yihui/animation")
+
+
+
+
